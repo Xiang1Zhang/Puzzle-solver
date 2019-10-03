@@ -1,0 +1,151 @@
+library IEEE;
+use IEEE.std_logic_1164.all;
+use ieee.numeric_std.all ;
+
+entity RESIZE is
+	port(	-- TO IMG_REC
+		img_clk		: in std_logic;
+		img_DAT		: in std_logic_vector;
+
+		-- COMM
+		itr		: in std_logic;
+		itr_rdy		: out std_logic;
+		s_clk		: in std_logic;
+		s_reset		: in std_logic;
+		
+		r_dat		: out std_logic_vector(7 downto 0);
+		r_adr		: out std_logic_vector(16 downto 0);
+		r_wr		: out std_logic);
+end entity;
+
+architecture A of RESIZE is
+
+	-- Internal versions output signals
+	signal i_r_dat : std_logic_vector(7 downto 0) := X"00";
+	signal i_r_adr : std_logic_vector(16 downto 0) := '0'&X"0000";
+	signal i_r_wr : std_logic := '0'; 
+	signal i_itr_rdy : std_logic := '0';
+
+	signal state : integer := 0;
+	signal e_itr : std_logic := '0';
+
+	signal re_img_clk : std_logic;
+	signal s2_cnt : std_logic;
+begin
+
+	-- MAPPING
+	r_dat <= i_r_dat;
+	r_adr <= i_r_adr;
+	r_wr <= i_r_wr;
+	itr_rdy <= i_itr_rdy;
+
+	proc : process(s_reset, s_clk) 
+
+		-- State 0 counter variable
+		variable s0_cnt : integer range 0 to 3;
+
+		-- edge detection variables (edv from now)
+		
+		variable e_img_clk : std_logic;
+
+		-- State 2 counter variable
+		variable s2_acnt : integer;
+
+		-- State 2 old data value
+		variable s2_oldd : std_logic_vector(7 downto 0);
+		variable wrdata : std_logic_vector(7 downto 0);
+	begin
+
+		if(s_reset='0') then
+			state <= 0;
+			-- Clear edv 
+			e_itr <= '0';
+			e_img_clk := '0';
+			re_img_clk <= '0'; 
+			s2_cnt <= '0';
+			s2_oldd := X"00";
+		elsif(rising_edge(s_clk)) then
+
+			-- Clear signals
+			i_r_wr <= '0';
+
+			if(e_img_clk='0' and img_clk='1') then		-- Rising edge
+				e_img_clk:='1';
+				re_img_clk<='1';
+			elsif(e_img_clk='1' and img_clk='0') then	-- Falling edge
+				e_img_clk:='0';
+				re_img_clk<='0'; 
+			end if;
+
+			case state is
+			when 0=> -- Idle -> wait for rising ITR (reset all variables)
+				s0_cnt := 0;
+				s2_acnt := 4;
+				s2_cnt <= '0';
+				s2_oldd := X"00";
+				
+				-- if rising edge goto next state
+				if(ITR='1' and e_itr='0') then state <= 1; e_itr<='1'; end if;
+				-- if falling edge reset edv
+				if(ITR='0' and e_itr='1') then e_itr<='0'; end if;
+
+			when 1=> -- Fill ram with image size 360 * 288 => 01 68  01 18 --  01 20
+				case s0_cnt is
+				when 0=> -- 01
+					i_r_dat<=X"01";
+					i_r_adr<='0'&X"0000";
+					i_r_wr<='1';
+					s0_cnt:=1;
+				when 1=> -- 68
+					i_r_dat<=X"68";
+					i_r_adr<='0'&X"0001";
+					i_r_wr<='1';
+					s0_cnt:=2;
+				when 2=> -- 01
+					i_r_dat<=X"01";
+					i_r_adr<='0'&X"0002";
+					i_r_wr<='1';
+					s0_cnt:=3;
+				when 3=> -- 18 --20
+					i_r_dat<=X"18";
+					i_r_adr<='0'&X"0003";
+					i_r_wr<='1';
+					state<=2;
+				end case;
+				
+			when 2=> -- Waiting for rising edge of img_clk and write mean of two bytes to RAM
+				if(re_img_clk='1') then
+					re_img_clk<='0';
+					e_img_clk := '1';
+					-- first byte
+					if(s2_cnt='0') then 
+						s2_cnt<='1'; 
+						s2_oldd := img_dat;	
+					-- second byte
+					end if;
+					if(s2_cnt='1') then
+						i_r_dat<=std_logic_vector(to_unsigned((to_integer(unsigned(s2_oldd))+to_integer(unsigned(img_dat)))/2, 8)) and X"F0";
+						--i_r_dat<=wrdata(3 downto 0) & "0000";
+						--i_r_dat<=img_dat;
+						i_r_adr<=std_logic_vector(to_unsigned(s2_acnt,17));
+						i_r_wr<='1';
+						s2_acnt:=s2_acnt+1;
+
+						s2_cnt<='0';
+
+						-- END OF IMAGE
+						if(s2_acnt>=360*280) then -- 360*288
+							i_itr_rdy <= '1';
+						end if;
+					end if;					
+					
+				end if;
+
+			-- Unreachable state reached -> Reset
+			when others=> state <= 0;
+			end case;
+		end if;
+
+	end process;
+
+end architecture;

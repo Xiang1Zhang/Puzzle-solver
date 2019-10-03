@@ -1,0 +1,163 @@
+library IEEE;
+use IEEE.std_logic_1164.all;
+use ieee.numeric_std.all;
+use work.all;
+
+entity TOPLEVEL_TB is
+end entity;
+
+architecture A of TOPLEVEL_TB is
+
+	signal GPIO_0 		: std_logic_vector(26 downto 0);
+	signal CLOCK_50		: std_logic; 
+	signal KEY		: std_logic_vector(3 downto 0);
+
+	signal TD_DATA		:  std_logic_vector(7 downto 0) := X"00";
+	signal TD_HS		:  std_logic := '0';
+	signal TD_VS		:  std_logic := '0' ;
+	signal TD_RESET_N	:  std_logic := '0';
+	
+	-- RPI signals
+	signal RPIDAT		: std_logic_vector(7 downto 0);
+	signal RPICLK		: std_logic := '0';
+	signal RPIHLD		: std_logic;
+	signal RPIREQ		: std_logic := '0';
+	
+	-- System signals
+	signal s_clk		: std_logic := '0';
+	signal s_reset		: std_logic;	
+	
+	signal F		: boolean := true;
+
+	signal CLK27		: std_logic := '0'; 
+	signal LCT : integer := 0;
+	signal DCLK		: std_logic := '0'; 
+	
+begin
+
+	s_clk <= not s_clk after 10 ns when F;
+	CLK27 <= not CLK27 after 18.5 ns when F;
+
+	e : entity TOPLEVEL(A) port map(
+		GPIO_0,
+		CLOCK_50,
+		KEY,
+		CLK27,
+		TD_DATA,
+		TD_HS,
+		TD_VS
+	);
+	
+	-- Mapping RPI signals to IO
+	RPIDAT(6 downto 0) 		<= GPIO_0(15 downto 9);
+	RPIDAT(7) 			<= GPIO_0(4);
+	RPIHLD 				<= GPIO_0(21);
+	GPIO_0(24) 			<= RPICLK;
+	GPIO_0(25) 			<= RPIREQ;
+	
+	-- Mapping system signals to IO
+	KEY(0) 					<= s_reset;
+	CLOCK_50				<= s_clk;
+	
+	-- TB timeline
+	process begin
+		-- RESET
+		s_reset <= '0';
+		wait for 1000 ns;
+		s_reset <= '1';
+		wait for 100 ns;
+		
+		RPIREQ <= '1';
+		wait for 100 ns;
+		wait until RPIHLD='0';
+		wait for 100 ns;
+		
+		for i in 0 to 360*288+4 loop
+			
+			RPICLK <= '1';
+			wait for 100 ns;
+			while RPIHLD='1' loop wait for 1 ps; end loop;
+			wait for 500 ns;
+			RPICLK <= '0';
+			wait for 500 ns;
+			
+		end loop;
+		
+		F <= false;
+		wait;
+	end process;
+
+	-- VIDEO CHIP
+	process(CLK27)
+		variable state : integer range 0 to 11;
+		variable CNT : integer;
+	begin
+		DCLK <= '0';
+		if(rising_edge(CLK27)) then
+		case state is
+			when 0=>
+				TD_DATA <= X"ff";
+				DCLK <= '1';
+				state := state + 1;
+			when 1=>
+				TD_DATA <= X"00";
+				DCLK <= '1';
+				state := state + 1;
+			when 2=>
+				TD_DATA <= X"00";
+				DCLK <= '1';
+				state := state + 1;
+			when 3=>
+				TD_DATA <= X"00"; -- XY
+				DCLK <= '1';
+				state := state + 1;
+			when 4=>
+				TD_DATA <= X"00";
+				TD_HS <= '0';
+				DCLK <= '1';
+				state := state + 1;
+				
+				if(LCT=3) then TD_VS <= '0';
+				elsif(LCT=6) then TD_VS <= '1'; else
+					LCT <= LCT + 1;
+				end if;
+				if(LCT>312) then LCT<=0; end if;
+
+			when 5=>
+				TD_DATA <= X"00";
+				DCLK <= '1';
+				state := state + 1;
+				CNT := 0;
+			when 6=>
+				TD_HS <= '1'; 
+				DCLK <= '1';
+				TD_DATA <= X"00";
+				if(CNT=282) then state := 7; end if;
+				CNT := CNT + 1;
+			when 7=>
+				TD_DATA <= X"ff";
+				DCLK <= '1';
+				state := state + 1;
+			when 8=>
+				TD_DATA <= X"00";
+				DCLK <= '1';
+				state := state + 1;
+			when 9=>
+				TD_DATA <= X"00";
+				DCLK <= '1';
+				state := state + 1;
+			when 10=>
+				TD_DATA <= X"00"; -- XY
+				DCLK <= '1';
+				state := state + 1;
+				CNT := 0;
+			when 11=>
+				DCLK <= '1';
+				TD_DATA <= std_logic_vector(to_unsigned(CNT, 8));
+				if(CNT=1440) then state := 0; end if;
+				CNT := CNT + 1;
+		end case;
+		end if;
+	end process;
+
+end architecture;
